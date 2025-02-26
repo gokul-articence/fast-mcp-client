@@ -1,2 +1,2 @@
 # MCP FastAPI Client 
-Sample FastAPI application implementing MCP Client
+Sample of FastAPI application implementing MCP Client
