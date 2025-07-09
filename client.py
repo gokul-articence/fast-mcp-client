@@ -12,10 +12,10 @@ import re
 
 
 from abc import ABC, abstractmethod
-from anthropic import Anthropic
-from openai import OpenAI
+# from anthropic import Anthropic
+# from openai import OpenAI
 
-from llms import AnthropicClient, OpenAIClient
+from llms import AnthropicClient, OpenAIClient,GeminiClient
 
 # Load environment variables
 load_dotenv()
@@ -150,10 +150,47 @@ async def process_query(query: Query):
             print(messages)
             print()
 
-            llm_client = AnthropicClient(api_key=os.getenv("ANTHROPIC_API_KEY"), tools=mcp_client_manager.tools)
+            # llm_client = AnthropicClient(api_key=os.getenv("ANTHROPIC_API_KEY"), tools=mcp_client_manager.tools)
             # llm_client = OpenAIClient(api_key=os.getenv("OPENAI_API_KEY"), tools=mcp_client_manager.tools)
+            # Convert MCP tool dicts to Gemini function declarations
+            function_declarations = []
+            from schema_utils import clean_openapi_schema
+            for tool in mcp_client_manager.tools:
+                if all(k in tool for k in ("name", "description", "input_schema")):
+                    # Clean input_schema for Gemini compatibility
+                    input_schema = clean_openapi_schema(tool["input_schema"])
+                    function_declarations.append({
+                        "name": tool["name"],
+                        "description": tool["description"],
+                        "parameters": input_schema
+                    })
+            llm_client = GeminiClient(api_key=os.getenv('GEMINI_API_KEY'), function_declarations=function_declarations)
+
             
-            response = await llm_client.create_message(messages)
+            # Helper to flatten any object to a string before sending to Gemini
+            def flatten_to_string(obj):
+                # Special case: list of dicts with 'type': 'tool_result'
+                if isinstance(obj, list):
+                    if all(isinstance(x, dict) and x.get('type') == 'tool_result' for x in obj):
+                        return "\n".join(flatten_to_string(x.get('content', '')) for x in obj)
+                    return "\n".join(flatten_to_string(x) for x in obj)
+                elif isinstance(obj, dict):
+                    if "text" in obj and len(obj) == 1:
+                        return str(obj["text"])
+                    if obj.get('type') == 'tool_result' and 'content' in obj:
+                        return flatten_to_string(obj['content'])
+                    return "\n".join(flatten_to_string(v) for v in obj.values())
+                else:
+                    return str(obj)
+
+            # Gemini expects messages as a list of strings or list of {'text': ...}
+            gemini_messages = []
+            for msg in messages:
+                if isinstance(msg, dict) and "content" in msg:
+                    gemini_messages.append(flatten_to_string(msg["content"]))
+                else:
+                    gemini_messages.append(flatten_to_string(msg))
+            response = await llm_client.create_message(gemini_messages)
             print(response)
             print()
 
@@ -162,7 +199,12 @@ async def process_query(query: Query):
             print(parsed_response)
             print()
 
-            messages.append(parsed_response.content)
+            # Append Gemini-compatible tool result message using helper defined above
+            if parsed_response.content and isinstance(parsed_response.content, dict) and parsed_response.content.get("content"):
+                content = parsed_response.content["content"]
+                messages.append(flatten_to_string(content))
+            else:
+                messages.append(flatten_to_string(parsed_response.content))
             if parsed_response.text_content:
                 responses.extend(parsed_response.text_content)
 
@@ -194,6 +236,8 @@ async def process_query(query: Query):
         }
         
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

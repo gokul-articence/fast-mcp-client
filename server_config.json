@@ -5,31 +5,8 @@
       "args": [
         "-y",
         "@modelcontextprotocol/server-filesystem",
-        "/Users/mekari/Desktop"
+        "/home/gokul_articence/Desktop"
       ]
-    },
-    "brave-search": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-brave-search"
-      ],
-      "env": {
-        "BRAVE_API_KEY": "<BRAVE_API_KEY>"
-      }
-    },
-    "email": {
-      "command": "/Users/mekari/.local/bin/uv",
-      "args": [
-        "--directory",
-        "/Users/mekari/Desktop/mcp/servers/claude-post/src/email_client",
-        "run",
-        "email-client"
-      ]
-    },
-    "google-calendar": {
-      "command": "node",
-      "args": ["/Users/mekari/Desktop/mcp/servers/google-calendar-mcp/build/index.js"]
     }
   }
 }

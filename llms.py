@@ -1,8 +1,10 @@
 from abc import ABC, abstractmethod
 from anthropic import Anthropic
-from openai import OpenAI
+import openai
 from pydantic import BaseModel
 from typing import Dict, List, Optional
+from google import genai
+
 import json
 
 class LLMClient(ABC):
@@ -30,7 +32,7 @@ class LLMClient(ABC):
 
 class OpenAIClient(LLMClient):
     def __init__(self, api_key: str, tools):
-        self.client = OpenAI(api_key=api_key)
+        openai.api_key = api_key
         self.tools = tools
 
     def _prepare_tool_obj(self, tools):
@@ -63,9 +65,9 @@ class OpenAIClient(LLMClient):
             for tool in preprocessed_tools
         ]
 
-        return self.client.chat.completions.create(
+        return openai.ChatCompletion.create(
             model="gpt-4o",
-            max_completion_tokens=1024,
+            max_tokens=1024,
             messages=messages,
             tools=openai_tools
         )
@@ -96,6 +98,7 @@ class OpenAIClient(LLMClient):
         } 
     
 class AnthropicClient(LLMClient):
+
     def __init__(self, api_key: str, tools):
         self.client = Anthropic(api_key=api_key)
         self.tools = tools
@@ -147,3 +150,68 @@ class AnthropicClient(LLMClient):
                 }
             ]
         } 
+
+
+class GeminiClient(LLMClient):
+    def __init__(self, api_key: str, function_declarations):
+        from google import genai
+        from google.genai import types
+        self.client = genai.Client(api_key=api_key)
+        self.function_declarations = function_declarations
+
+    async def create_message(self, messages: list) -> dict:
+        from google.genai import types
+        # Wrap the function declarations into a Tool and config as per new Gemini API
+        tools = types.Tool(function_declarations=self.function_declarations)
+        config = types.GenerateContentConfig(tools=[tools])
+        response = self.client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=messages,
+            config=config,
+        )
+        return response
+
+    def parse_response(self, response) -> LLMClient.Response:
+        text_content = []
+        tool_calls = []
+        # Gemini v2 function call responses
+        candidates = getattr(response, "candidates", None)
+        if candidates and hasattr(candidates[0].content, "parts"):
+            parts = candidates[0].content.parts
+            for part in parts:
+                if hasattr(part, "function_call") and part.function_call:
+                    tool_calls.append(
+                        LLMClient.ToolCall(
+                            id=getattr(part.function_call, "name", ""),
+                            name=getattr(part.function_call, "name", ""),
+                            input=getattr(part.function_call, "args", {})
+                        )
+                    )
+                elif hasattr(part, "text"):
+                    text_content.append(part.text)
+        else:
+            # fallback: try to extract text
+            if hasattr(response, "text"):
+                text_content.append(response.text)
+
+        parsed_response = LLMClient.Response(
+            content={
+                "role": "assistant",
+                "content": getattr(response, "text", "") or getattr(response, "candidates", "")
+            },
+            text_content=text_content,
+            tool_calls=tool_calls
+        )
+        return parsed_response
+
+    def parse_tool_result(self, tool_call, tool_result) -> Dict:
+        return {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tool_call.id,
+                    "content": tool_result.content
+                }
+            ]
+        }
